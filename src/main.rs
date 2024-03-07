@@ -1,4 +1,4 @@
-use std::{fmt, io};
+use std::{env, fmt, io, num};
 
 use actix_web::error::{ErrorInternalServerError, ErrorUnprocessableEntity};
 use actix_web::{http, middleware, web, App, HttpRequest, HttpResponse, HttpServer};
@@ -9,8 +9,15 @@ use sqlx::types::chrono::{Local, NaiveDateTime};
 
 #[derive(Debug)]
 enum CustomError {
+    ParseIntError(num::ParseIntError),
     IoError(io::Error),
     SQLError(sqlx::Error),
+}
+
+impl From<num::ParseIntError> for CustomError {
+    fn from(error: num::ParseIntError) -> Self {
+        CustomError::ParseIntError(error)
+    }
 }
 
 impl From<io::Error> for CustomError {
@@ -376,7 +383,7 @@ async fn get_pool() -> Result<sqlx::Pool<sqlx::Postgres>, CustomError> {
     Ok(pool)
 }
 
-async fn run_server(data: web::Data<MyData>) -> Result<(), CustomError> {
+async fn run_server(data: web::Data<MyData>, port: u16) -> Result<(), CustomError> {
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));
 
     let _ = HttpServer::new(
@@ -392,16 +399,27 @@ async fn run_server(data: web::Data<MyData>) -> Result<(), CustomError> {
                 .app_data(data.clone())
         }, // add shared state
     )
-    .bind(("127.0.0.1", 9999))?
+    .bind(("127.0.0.1", port))?
     .run()
     .await?;
     Ok(())
 }
 
+const PORT: u16 = 8080;
+
 #[tokio::main]
 async fn main() -> Result<(), CustomError> {
+    let args: Vec<String> = env::args().collect();
+    let mut port = PORT;
+    if args.len() > 2 {
+        panic!("args length should be max 1");
+    }
+    if args.len() != 1 {
+        port = args[1].parse::<u16>()?;
+    }
+
     let pool = get_pool().await?;
     let server_data = web::Data::new(MyData { pool });
 
-    run_server(server_data).await
+    run_server(server_data, port).await
 }
