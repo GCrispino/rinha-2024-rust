@@ -281,20 +281,14 @@ async fn get_statement_db(
 		LIMIT 10
 	";
 
-    println!("STATEMENT EITA1!");
-
     let statement_query_res = sqlx::query_as::<_, GetCustomerStatementResult>(query)
         .bind(id)
         .fetch_all(&pool)
         .await?;
 
-    println!("STATEMENT EITA2!");
-
     if statement_query_res.len() == 0 {
         return Err(AppError::ErrCustomerNotFound);
     }
-
-    println!("STATEMENT EITA3!");
 
     let first_res = statement_query_res
         .first()
