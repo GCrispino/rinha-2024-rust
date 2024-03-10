@@ -12,6 +12,8 @@ enum CustomError {
     ParseIntError(num::ParseIntError),
     IoError(io::Error),
     SQLError(sqlx::Error),
+    StringError(String),
+    StandardError(Box<dyn std::error::Error>),
 }
 
 impl From<num::ParseIntError> for CustomError {
@@ -367,11 +369,14 @@ async fn create_customer_transaction_db(
     Ok((limit as i64, (total as i64) + update_value))
 }
 
-async fn get_pool() -> Result<sqlx::Pool<sqlx::Postgres>, CustomError> {
+async fn get_pool(
+    conn_string: &str,
+    n_max_connections: u32,
+) -> Result<sqlx::Pool<sqlx::Postgres>, CustomError> {
     // Create a connection pool
     let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect("postgres://user:password@localhost/rinha")
+        .max_connections(n_max_connections)
+        .connect(conn_string)
         .await?;
 
     Ok(pool)
@@ -393,27 +398,56 @@ async fn run_server(data: web::Data<MyData>, port: u16) -> Result<(), CustomErro
                 .app_data(data.clone())
         }, // add shared state
     )
-    .bind(("127.0.0.1", port))?
+    .bind(("0.0.0.0", port))?
     .run()
     .await?;
     Ok(())
 }
 
 const PORT: u16 = 8080;
+const DEFAULT_DB_N_MAX_CONNECTIONS: u32 = 5;
+const DEFAULT_DB_CONN_STRING: &str = "postgres://user:password@localhost/rinha";
 
-#[tokio::main]
-async fn main() -> Result<(), CustomError> {
+#[derive(Debug)]
+struct Config {
+    port: u16,
+    db_n_max_connections: u32,
+    db_conn_string: String,
+}
+
+fn load_config() -> Result<Config, CustomError> {
     let args: Vec<String> = env::args().collect();
     let mut port = PORT;
     if args.len() > 2 {
-        panic!("args length should be max 1");
+        return Err(CustomError::StringError(
+            "args length should be max 1".to_string(),
+        ));
     }
     if args.len() != 1 {
         port = args[1].parse::<u16>()?;
     }
 
-    let pool = get_pool().await?;
+    let db_n_max_connections: u32 = env::var("DB_MAX_OPEN_CONNS")
+        .map_err(|err| CustomError::StandardError(Box::new(err)))
+        .and_then(|n_str| n_str.parse::<u32>().map_err(CustomError::ParseIntError))
+        .unwrap_or(DEFAULT_DB_N_MAX_CONNECTIONS);
+
+    let db_conn_string = env::var("DB_CONN_STR").unwrap_or(DEFAULT_DB_CONN_STRING.to_string());
+
+    Ok(Config {
+        port,
+        db_n_max_connections,
+        db_conn_string,
+    })
+}
+
+#[tokio::main]
+async fn main() -> Result<(), CustomError> {
+    let cfg = load_config()?;
+    println!("Config: {:?}", cfg);
+
+    let pool = get_pool(cfg.db_conn_string.as_str(), cfg.db_n_max_connections).await?;
     let server_data = web::Data::new(MyData { pool });
 
-    run_server(server_data, port).await
+    run_server(server_data, cfg.port).await
 }
